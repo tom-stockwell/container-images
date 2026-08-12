@@ -5,6 +5,10 @@ FROM ${REGISTRY_ACCESS_REDHAT_COM}/hi/rust:latest AS delta
 ARG GIT_DELTA_VERSION=0.19.2
 RUN cargo install git-delta --version ${GIT_DELTA_VERSION}
 
+FROM ${REGISTRY_ACCESS_REDHAT_COM}/hi/rust:latest AS prek
+ARG PREK_VERSION=0.4.13
+RUN cargo install prek --version ${PREK_VERSION}
+
 FROM ${REGISTRY_REDHAT_IO}/devspaces/udi-base-rhel10:3.29.1
 ARG EPEL_BASE_URL=https://dl.fedoraproject.org/pub/epel
 ARG BIN_DIR=/usr/local/bin
@@ -12,6 +16,7 @@ ARG BIN_DIR=/usr/local/bin
 USER 0
 
 COPY --from=delta --chown=root:root --chmod=755 /usr/local/cargo/bin/delta ${BIN_DIR}/
+COPY --from=prek --chown=root:root --chmod=755 /usr/local/cargo/bin/prek ${BIN_DIR}/
 
 RUN dnf install -y "${EPEL_BASE_URL}/epel-release-latest-10.noarch.rpm" \
     && dnf install -y --setopt=install_weak_deps=0 \
