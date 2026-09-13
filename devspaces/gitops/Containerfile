@@ -1,0 +1,15 @@
+ARG REGISTRY_REDHAT_IO=registry.redhat.io
+ARG REGISTRY_ACCESS_REDHAT_COM=registry.access.redhat.com
+ARG REGISTRY_QUAY_IO=quay.io
+
+FROM ${REGISTRY_QUAY_IO}/tstockwell/devspaces/base
+USER 0
+
+ARG BIN_DIR=/usr/local/bin
+ARG REGISTRY_K8S_IO=registry.k8s.io
+ARG KUSTOMIZE_VERSION=v5.8.1
+COPY --from=${REGISTRY_K8S_IO}/kustomize/kustomize:${KUSTOMIZE_VERSION} --chown=root:root --chmod=755 /app/kustomize ${BIN_DIR}/
+
+RUN dnf install -y yq helm kustomize yamllint
+
+USER user

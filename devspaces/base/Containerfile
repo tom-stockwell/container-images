@@ -19,6 +19,8 @@ ARG EPEL_BASE_URL=https://dl.fedoraproject.org/pub/epel
 RUN dnf copr enable -y atim/starship  \
     && dnf install -y "${EPEL_BASE_URL}/epel-release-latest-10.noarch.rpm"  \
     && dnf install -y --setopt=install_weak_deps=0  \
-    zsh ripgrep starship
+      zsh ripgrep starship  \
+    && dnf copr disable -y atim/starship  \
+    && dnf repo disable -y epel
 
 USER user
