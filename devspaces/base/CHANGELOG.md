@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file. See [conven
 ## devspaces/base-0.1.0 - 2026-09-15
 #### Features
 - test cog - (36a2689) - Tom Stockwell
+#### Miscellaneous Chores
+- (**version**) 0.1.0 - (2b846b6) - stocky37
+
+- - -
+
+## devspaces/base-0.1.0 - 2026-09-15
+#### Features
+- test cog - (36a2689) - Tom Stockwell
 
 - - -
 
