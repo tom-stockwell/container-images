@@ -7,29 +7,35 @@
 # compute the next semantic version from the conventional commits that
 # touched it, and tag the current commit as "<image-name>/v<version>".
 #
-# Image name          = directory path of the Containerfile, relative to the
-#                       repo root (e.g. "devspaces/base").
-# Version tag format  = "<image-name>/v<major>.<minor>.<patch>"
-#                       (e.g. "devspaces/base/v1.4.2").
+#   Image name         directory of the Containerfile, relative to the repo
+#                      root (e.g. "devspaces/base").
+#   Version tag        "<image-name>/v<major>.<minor>.<patch>"
+#                      (e.g. "devspaces/base/v1.4.2").
 #
-# Version bump rules (highest matching wins, over all commits in range):
-#   major  -> a commit with "!" after type/scope, or a "BREAKING CHANGE"/
-#             "BREAKING-CHANGE" footer.
-#   minor  -> a "feat" commit.
-#   patch  -> a "fix"/"perf"/"refactor"/"revert"/"build" commit, or any
-#             other change when nothing higher matched (an image that
-#             changed always gets at least a patch bump).
-#
-# Usage:
-#   scripts/tag-images.sh [options]
-#
-# Options:
-#   -n, --dry-run   Show what would be tagged without creating any tags.
-#   -p, --push      Push the created tags to the remote after tagging.
-#   -r, --remote R  Remote to push to (default: origin). Implies --push.
-#   -h, --help      Show this help and exit.
+# Version bump rules (highest matching level wins, over all commits in range):
+#   major   a commit with "!" after the type/scope, or a "BREAKING CHANGE"/
+#           "BREAKING-CHANGE" footer.
+#   minor   a "feat" commit.
+#   patch   any other change (an image that changed always gets at least a
+#           patch bump). The first tag for an image is always v0.0.1.
 #
 set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/tag-images.sh [options]
+
+Tag the current commit with the next semantic version for every container
+image (directory containing a Containerfile) that has changed since its last
+release tag.
+
+Options:
+  -n, --dry-run     Show what would be tagged without creating any tags.
+  -p, --push        Push the created tags to the remote after tagging.
+  -r, --remote R    Remote to push to (default: origin). Implies --push.
+  -h, --help        Show this help and exit.
+EOF
+}
 
 # --------------------------------------------------------------------------
 # Options
@@ -37,10 +43,6 @@ set -euo pipefail
 DRY_RUN=0
 PUSH=0
 REMOTE="origin"
-
-usage() {
-  sed -n '2,/^set -euo/p' "$0" | sed 's/^# \{0,1\}//; s/^#//' | sed '$d'
-}
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,75 +56,59 @@ while [[ $# -gt 0 ]]; do
 done
 
 # --------------------------------------------------------------------------
-# Helpers
+# Output helpers (colour only when stderr is a terminal)
 # --------------------------------------------------------------------------
+if [[ -t 2 ]]; then
+  CYAN=$'\033[36m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+else
+  CYAN=''; YELLOW=''; RESET=''
+fi
+
 log()  { printf '%s\n' "$*" >&2; }
-info() { printf '\033[36m%s\033[0m\n' "$*" >&2; }
-warn() { printf '\033[33m%s\033[0m\n' "$*" >&2; }
+info() { printf '%s%s%s\n' "$CYAN" "$*" "$RESET" >&2; }
+warn() { printf '%s%s%s\n' "$YELLOW" "$*" "$RESET" >&2; }
 
-# Move to the repo root so all paths are relative to it.
-REPO_ROOT="$(git rev-parse --show-toplevel)"
-cd "$REPO_ROOT"
-
-# The commit we will attach tags to.
-HEAD_SHA="$(git rev-parse HEAD)"
-
-# Return the latest "<image>/vX.Y.Z" tag for an image, or empty if none.
-latest_tag_for() {
+# --------------------------------------------------------------------------
+# Git helpers
+# --------------------------------------------------------------------------
+# Latest "<image>/vX.Y.Z" version for an image (bare "X.Y.Z"), or empty if none.
+latest_version_for() {
   local image="$1"
   { git tag --list "${image}/v*" \
-    | sed -n "s#^${image}/v##p" \
-    | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
-    | sort -V \
-    | tail -n1 ; } || true
+      | sed -n "s#^${image}/v##p" \
+      | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+      | sort -V \
+      | tail -n1 ; } || true
 }
 
-# Decide the bump level ("major"/"minor"/"patch"/"none") for a commit range
-# affecting a specific path. Prints one of those words.
+# Highest bump level ("major"/"minor"/"patch"/"none") implied by the commits in
+# <range> that touched <path>.
 bump_for_range() {
   local range="$1" path="$2"
-  local level="none"
+  local level="none" sha body header
 
-  # Iterate over each commit that touched this path, newest first.
-  local sha
   while IFS= read -r sha; do
-    [[ -z "$sha" ]] && continue
-
-    local body header
     body="$(git show -s --format=%B "$sha")"
-    header="$(printf '%s\n' "$body" | head -n1)"
+    header="${body%%$'\n'*}"
 
-    # Breaking change: "type!:" / "type(scope)!:" header, or a footer.
+    # Breaking change is the ceiling, so we can stop as soon as we see one.
     if [[ "$header" =~ ^[a-zA-Z]+(\([^\)]*\))?!: ]] \
        || printf '%s\n' "$body" | grep -Eq '^BREAKING[ -]CHANGE:'; then
       echo "major"
-      return 0   # major is the ceiling; stop early.
+      return 0
     fi
 
-    # Conventional-commit type from the header.
-    local type=""
-    if [[ "$header" =~ ^([a-zA-Z]+)(\([^\)]*\))?!?: ]]; then
-      type="${BASH_REMATCH[1],,}"
+    if [[ "$header" =~ ^feat(\([^\)]*\))?: ]]; then
+      level="minor"
+    elif [[ "$level" == "none" ]]; then
+      level="patch"
     fi
-
-    case "$type" in
-      feat)
-        [[ "$level" != "minor" ]] && level="minor"
-        ;;
-      fix|perf|refactor|revert|build)
-        [[ "$level" == "none" ]] && level="patch"
-        ;;
-      *)
-        # Any other change still counts as a patch-worthy change.
-        [[ "$level" == "none" ]] && level="patch"
-        ;;
-    esac
   done < <(git log --format=%H "$range" -- "$path")
 
   echo "$level"
 }
 
-# Apply a bump level to a semver string, print the new version.
+# Print <version> with <level> (major/minor/patch) applied.
 apply_bump() {
   local version="$1" level="$2"
   local major minor patch
@@ -138,15 +124,18 @@ apply_bump() {
 # --------------------------------------------------------------------------
 # Main
 # --------------------------------------------------------------------------
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+HEAD_SHA="$(git rev-parse HEAD)"
+
 info "Repo:  $REPO_ROOT"
 info "HEAD:  $HEAD_SHA"
 [[ "$DRY_RUN" == 1 ]] && warn "Running in dry-run mode; no tags will be created."
 
-# Discover all images: every directory containing a Containerfile.
+# Discover images: every directory containing a Containerfile.
 mapfile -t IMAGES < <(
   git ls-files '**/Containerfile' 'Containerfile' \
     | xargs -r -n1 dirname \
-    | sed 's#^\./##' \
     | sort -u
 )
 
@@ -158,45 +147,38 @@ fi
 CREATED_TAGS=()
 
 for image in "${IMAGES[@]}"; do
-  last_ver="$(latest_tag_for "$image")"
+  last_ver="$(latest_version_for "$image")"
 
-  first_release=0
   if [[ -n "$last_ver" ]]; then
-    last_tag="${image}/v${last_ver}"
-    range="${last_tag}..HEAD"
-    base_ver="$last_ver"
+    # Compare against everything since the last release tag.
+    range="${image}/v${last_ver}..HEAD"
+    since="${image}/v${last_ver}"
+    level="$(bump_for_range "$range" "$image")"
+    [[ "$level" == "none" ]] && level="patch"
   else
-    # No tag exists (or none with a valid version): fall back to 0.0.0 and
-    # patch-bump, so the first tag for an image is v0.0.1.
-    first_release=1
-    last_tag=""
+    # No release yet: start at 0.0.0 and patch-bump to v0.0.1.
+    last_ver="0.0.0"
     range="HEAD"
-    base_ver="0.0.0"
+    since="repo start"
+    level="patch"
   fi
 
-  # Has anything under this image's directory changed in the range?
+  # Skip images with no commits touching them in the range.
   if [[ -z "$(git log --format=%H "$range" -- "$image")" ]]; then
-    log "· ${image}: no changes since ${last_tag:-repo start} (currently v${last_ver:-0.0.0})"
+    log "· ${image}: no changes since ${since} (currently v${last_ver})"
     continue
   fi
 
-  if [[ "$first_release" == 1 ]]; then
-    level="patch"
-  else
-    level="$(bump_for_range "$range" "$image")"
-    [[ "$level" == "none" ]] && level="patch"
-  fi
-
-  new_ver="$(apply_bump "$base_ver" "$level")"
+  new_ver="$(apply_bump "$last_ver" "$level")"
   new_tag="${image}/v${new_ver}"
 
-  # Guard against tagging the same commit twice with the same version.
+  # Guard against tagging the same version twice.
   if git rev-parse -q --verify "refs/tags/${new_tag}" >/dev/null; then
     warn "✗ ${image}: tag ${new_tag} already exists; skipping"
     continue
   fi
 
-  info "✓ ${image}: v${last_ver:-0.0.0} -> v${new_ver} (${level} bump) -> ${new_tag}"
+  info "✓ ${image}: v${last_ver} -> v${new_ver} (${level} bump) -> ${new_tag}"
 
   if [[ "$DRY_RUN" == 0 ]]; then
     git tag -a "$new_tag" -m "${image} v${new_ver}" "$HEAD_SHA"
@@ -204,11 +186,16 @@ for image in "${IMAGES[@]}"; do
   fi
 done
 
-if [[ "$DRY_RUN" == 0 && "$PUSH" == 1 && ${#CREATED_TAGS[@]} -gt 0 ]]; then
-  info "Pushing ${#CREATED_TAGS[@]} tag(s) to ${REMOTE}..."
-  git push "$REMOTE" "${CREATED_TAGS[@]}"
+if [[ "$DRY_RUN" == 1 ]]; then
+  exit 0
 fi
 
-if [[ ${#CREATED_TAGS[@]} -eq 0 && "$DRY_RUN" == 0 ]]; then
+if [[ ${#CREATED_TAGS[@]} -eq 0 ]]; then
   log "No new tags created."
+  exit 0
+fi
+
+if [[ "$PUSH" == 1 ]]; then
+  info "Pushing ${#CREATED_TAGS[@]} tag(s) to ${REMOTE}..."
+  git push "$REMOTE" "${CREATED_TAGS[@]}"
 fi
