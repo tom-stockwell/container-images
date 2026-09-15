@@ -1,4 +1,10 @@
 tag_prefix = "v"
+disable_changelog = true
+disable_bump_commit = true
+from_latest_tag = true
+
+[changelog]
+
 
 [monorepo.packages."devspaces/base"]
 path = "devspaces/base"
