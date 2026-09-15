@@ -2,6 +2,8 @@ tag_prefix = "v"
 disable_changelog = true
 disable_bump_commit = true
 from_latest_tag = true
+generate_mono_repository_global_tag = false
+
 
 [changelog]
 
