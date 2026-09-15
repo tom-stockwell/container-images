@@ -1,0 +1,6 @@
+verbose: true
+tag.pattern: devspaces/base/v*
+tag.prefix: devspaces/base/v
+log.directory:
+  - .
+v0: true

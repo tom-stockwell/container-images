@@ -1,0 +1,3 @@
+[monorepo.packages."devspaces/base"]
+path = "devspaces/base"
+#tag_prefix = "devspaces/base/v"
